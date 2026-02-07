@@ -1,0 +1,340 @@
+---
+title: "Auditory disruption in serial recall tasks"
+author: "Akkerman Daniel (), Gozzo Laura (), Koltai Daniel (), Radman Barto (2062836)"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load the libraries:
+
+```{r load, message = FALSE, warning=FALSE}
+library(dplyr)
+library(rstan)
+library(bcogsci)
+library(extraDistr)
+library(knitr)
+library(kableExtra)
+library(DiagrammeR)
+library(tibble)
+library(stats)
+library(bayesplot)
+library(ggplot2)
+options(mc.cores = parallel::detectCores())
+```
+
+## 1. Description of the phenomenon 
+
+How does the content and spatial position of an item sequence encode successfully in short-term memory?
+What is the effect of auditory distraction on this cognitive process?
+
+Serial recall task presents participants with a list of items shown in serial order at a specific rate, typically for one second (Hurlstone, M. J., 2020). Participants are instructed to remember the presented item, along with that items position in the sequence - subsequently reproducing the sequence.
+
+The reproduced sequence responses are then categorized into several possible categorical outcomes. During the encoding the sequence, participants are audibly distracted by task irrelevant speech (Jones et al., 2010). Auditory disturbances directly affect the process of encoding the sequence in short-term memory. 
+
+(Note)
+- items in the experiment can range in length and sequence complexity
+- positions of the items in the list can also be used for furthering the model, effects such as primacy and recency 
+- irrelevant speech disruption constant can vary in intensity
+
+Underlying explanations rely on the attentional cognitive processes present in encoding and retrieving items of a sequence.
+
+Attention capture represents the process of sufficient information encoding of an item from a presented sequence. Any kind of information can either be encoded or the participant fails to encode that information due to the auditory distraction (Lange, 2005). The initial process serves as a baseline for attention allocation to any kind of presented information.
+Interference control captures the effect of auditory distraction, where participants encode the correct information despite interference. Successful distraction causes an intrusion error where item is recalled that is in a way related to the irrelevant speech distractor (Jones et al,. 2010).
+Position encoding captures encoding of the position of each item. An item can either be recalled in the correct position or can be recalled correctly but in a different position than originally in the sequence. Once the information has been encoded, with correct content and position, it is encoded in short-term memory retention where participants reproduce the item of the sequence successfully or with false recall.
+False recall relates to an item being recalled which is not related to the auditory distractor
+
+Dependent variable would then be the responses of the participants which fall into different categories for each item in the sequence: 
+
+```{r, echo=FALSE}
+categorical_responses <- data.frame(
+  Response_Category = c(
+    "Successful recall",    
+    "Intrusion error", 
+    "Positional misplacement",        
+    "Item omission",
+    "False recall"
+  ),
+  
+  Description = c(
+    "The correct item is recalled in the correct position",
+    "Item not on the list is recalled",
+    "Correct item is recalled in the wrong position",
+    "The item is not recalled at all",
+    "Item is recalled incorrectly and unrelated to the distractor"
+  )
+)
+
+parameters <- data.frame(
+        Params = c("a", "t", "f", "c"),
+        Description = c(
+                "Probability of correct encoding",
+                "Probability of encoding the correct item",
+                "Probability of correct positional encoding",
+                "Probability of successful recall"
+                
+        )
+        
+)
+
+```
+```{r}
+print(categorical_responses)
+print(parameters)
+```
+
+Predictor variables influencing the type of categorical response is the effect of irrelevant speech for getting towards those responses, along with complexity and the length of the sequence and effect of item position.
+
+What is the effect of auditory distraction on short-term memory recall?
+
+Some examples of possible responses for a sequence:
+
+Sequence: Apple, River, Chair, Blue, Garden, Light
+Distractor: Irrelevant speech about birds
+
+If an item is omitted, the respondent does not recall any item. (None)
+Item was recalled that is not on the list, but related to the irrelevant speech. (sparrow)
+Correct item recalled at wrong position. (River recalled at position 3)
+False recall sees an item recalled that is wrong and unrelated to irrelevant speech. (Giraffe)
+Successful recall marks a correct item recalled at correct task. (Chair recalled at 3)
+
+
+## 2. Represented as a multinomial processing tree
+```{r, echo=FALSE}
+tree_model <- "
+digraph MPT_Serial_Recall {
+  
+  graph [layout = dot, rankdir = TB]
+  
+  node [shape = ellipse, style = filled, color = lightblue]
+  Attention  [label = 'Attention Allocation']
+  Encoding   [label = 'Serial Position Encoding']
+  Interference [label = 'Interference Management']
+  Retention  [label = 'Short-term memory retention']
+
+  SR [label = 'Successful Recall', shape = box, color = green3]
+  PME [label = 'Positionally misplaced encoding', shape = box, color = yellow]
+  IE [label = 'Intrusion Error', shape = box, color = pink]
+  OM [label = 'Omission', shape = box, color = grey]
+  FR [label = 'False Recall', shape = box, color = khaki1]
+
+  Attention -> Interference [label = 'Correctly Encoded (a)']
+  Attention -> OM [label = 'Failed to Encode (1 - a)']
+
+  Interference -> Encoding [label = 'Correct item under interference (t)']
+  Interference -> IE [label = 'Intrusion Error (1 - t)']
+
+  Encoding -> Retention [label = 'Positionally correct encoding (f)']
+  Encoding -> PME [label = 'Positionally misplaced encoding (1 - f)']
+
+  Retention -> SR [label = 'Successful Recall (c)']
+  Retention -> FR [label = 'False Recall (1 - c)']
+}
+"
+
+DiagrammeR::grViz(tree_model)
+
+```
+
+Probabilities of responses:
+
+P(OM | a,t,f,c) = (1 - a)
+
+P(IE | a,t,f,c) = a * (1 - t)
+
+P(PME | a,t,f,c) = a * t * (1 - f)
+
+P(FR | a,t,f,c) = a * t * f * (1 - c)
+
+P(SR | a,t,f,c) = a * t * f * c
+
+Likelihoods:
+
+Since we are modeling recall probabilities among categories:
+
+ans ~ Categorical(theta)
+theta ~ <thetaOM,thetaIE,thetaPME,thetaFR,thetaSR>
+
+a ~ Beta(4,2) - skewing towards greater attention baseline for participants
+t ~ Beta(2,2) - expected to be able to encode the correct content more often than random
+f ~ Beta(1,2) - expected to be the hardest to do under auditory distraction
+
+
+Priors:
+- for now we will just use these weakly informative priors
+
+To answer the research question, we could use any of the latent parameters as auditory distraction can impact the attentional resources, however we will regress intensity on the process of short term memory retention (c).
+Auditory distraction is modeled for its intensity.
+
+logit(c) = baseline without distraction (alpha_c) + effect of distraction (beta_c)*intensity
+alpha_c ~ Normal(0.3,0.5)
+Beta_c ~ Normal(0,1)
+
+## 3. Stan implementation
+
+```{stan output.var = "_data", code = readLines("serial_recall.stan"),  tidy = TRUE, comment="", eval = FALSE, cache = FALSE, cache.lazy = FALSE}
+```
+
+## 4. Generate synthetic data and verify that you can recover the parameters of the model 
+
+Simulating synthetic data
+
+```{r}
+set.seed(1)
+
+PR_OM <- function(a, t, f, c)
+        (1 - a)
+
+PR_IE <- function(a, t, f, c)
+        a * (1 - t)
+
+PR_PME <- function(a, t, f, c)
+        a * t * (1 - f)
+
+PR_FR <- function(a, t, f, c)
+        a * t * f * (1 - c)
+
+PR_SR <- function(a, t, f, c)
+        a * t * f * c
+
+# something to consider is the formulation of the task, for now we only simulate data for number of trials, number of participants, intensity of the distraction present, complexity and the length of the sequence and the sequence id - for hierarchical models we could simulate some info about the participants
+
+# for now just simulate with 1 participant and 50 trials
+# our response and stan model however rely on items, not trials so I kept the sequence length constant
+
+a_true <- 0.9
+t_true <- 0.8
+f_true <- 0.3
+alpha_c <- 0.3
+beta_c <- -0.2
+
+N_trials <- 50
+N_participants <- 10
+
+intensity <- round(runif(N_trials, 0, 1), 2)
+complexity <- sample(1:5, N_trials, replace = TRUE)
+seq_id <- 1:N_trials
+seq_length <- 5
+
+logit <- function(p) {
+  log(p / (1 - p))}
+
+plogis <- function(x) {
+  1 / (1 + exp(-x))}
+
+c_prime <- alpha_c + beta_c * intensity
+c_true <- plogis(c_prime)
+
+all_data <- data.frame()
+
+for (i in 1:N_trials) {
+  trial <- list(
+    sequence_id = seq_id[i],
+    sequence_length = seq_length,
+    complexity = complexity[i],
+    distractor_intensity = intensity[i],
+    participant_id = 1  #one participant
+  )
+  
+  c_true_trial <- plogis(logit(alpha_c) + beta_c * trial$distractor_intensity)
+
+  theta_OM <- PR_OM(a_true, t_true, f_true, c_true_trial)
+  theta_IE <- PR_IE(a_true, t_true, f_true, c_true_trial)
+  theta_PME <- PR_PME(a_true, t_true, f_true, c_true_trial)
+  theta_FR <- PR_FR(a_true, t_true, f_true, c_true_trial)
+  theta_SR <- PR_SR(a_true, t_true, f_true, c_true_trial)
+
+  theta_itm <- c(theta_SR, theta_FR, theta_PME, theta_IE, theta_OM)
+
+  for (pos in 1:5) {
+    resp <- sample(1:5, 1, prob = theta_itm)  
+    
+    all_data <- rbind(all_data, data.frame(
+      sequence_id = trial$sequence_id,
+      sequence_length = seq_length,
+      complexity = trial$complexity,
+      distractor_intensity = trial$distractor_intensity,
+      participant_id = trial$participant_id,
+      position_in_sequence = pos,
+      response_category = resp
+    ))
+  }
+}
+
+
+intensities <- all_data %>%
+  group_by(sequence_id) %>%
+  summarize(distractor_intensity = first(distractor_intensity)) %>%
+  select(distractor_intensity) %>%
+  pull(distractor_intensity)
+
+
+print(head(all_data))
+
+```
+
+Fitting the stan model
+
+```{r}
+data_srecall <- list(N_trials = N_trials,
+                     resp = all_data$response_category,
+                     intensity = all_data$distractor_intensity,
+                     seq_length = seq_length)
+
+fit_srecall <- stan('serial_recall.stan', data= data_srecall)
+```
+
+Recovery of the models
+- model seems to recover the parameters well, in particular beta_c puts a lot of emphasis on the influence of intensity of the distractor - suggesting that the intensity and not necessarily the presence of the distractor is important for the short term memory retention
+
+```{r}
+as.data.frame(fit_srecall) %>%
+  select(c("a","t","f")) %>%
+  mcmc_recover_hist(true = c(a_true, t_true, f_true)) +
+  coord_cartesian(xlim = c(0, 1))
+
+as.data.frame(fit_srecall) %>%
+  select(c("alpha_c", "beta_c")) %>%
+  mcmc_recover_hist(true = c(alpha_c, beta_c)) +
+  coord_cartesian(xlim = c(-1, 1))
+```
+
+
+```{r}
+print(fit_srecall, pars= c('a', 't', 'f', 'alpha_c', 'beta_c'))
+```
+
+## 5. Fit the MPT model to real data
+
+```{r}
+post_data <- rstan::extract(fit_srecall)$pred_resp[1,]
+post_data <- as.matrix(t(post_data))
+
+
+ppc_bars(all_data$response_category, post_data) +
+        ggtitle('Posterior predictive distribution')
+
+```
+IMPORTANT: here we need to provide conclusions based on the posterior predictive check along with the interpretation for the above recovered parameters.
+
+# Things to keep in mind for hierarchial implementation
+- participant and item variability - IMPORTANT: complexity will be in the model but it is not used yet, we should either use it for hierarchical model or omit it - also the positions of items in the sequence
+- we can think of some extra differences for participants if complexity is not used
+- looking through the above stuff there are some notes on what can be altered/added or even removed based on the feedback we get
+
+
+##References
+AuBuchon, A. M., McGill, C. I., & Elliott, E. M. (2019). Auditory distraction does more than disrupt rehearsal processes in children’s serial recall. Memory & Cognition, 47(4), 738–748. https://doi.org/10.3758/s13421-018-0879-4
+
+Hurlstone, M. J. (2020). Serial Recall. https://doi.org/10.31219/osf.io/4w8fu 
+
+Jones, D., Hughes, R., & Macken, W. (2010). Auditory distraction and serial memory: The avoidable and the ineluctable. Noise and Health, 12(49), 201. https://doi.org/10.4103/1463-1741.70497
+
+Lange, E. B. (2005). Disruption of attention by irrelevant stimuli in serial recall. Journal of Memory and Language, 53(4), 513–531. https://doi.org/10.1016/j.jml.2005.07.002
+
+
+
